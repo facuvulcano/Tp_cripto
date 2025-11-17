@@ -1,0 +1,140 @@
+"""FastAPI entrypoint exposing the secure authentication flows."""
+from __future__ import annotations
+
+from typing import List
+
+from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
+from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy.orm import Session
+
+from . import models, schemas
+from .config import get_settings
+from .database import get_db, init_db
+from .dependencies import get_current_user, require_active_user, require_csrf
+from .services.auth_service import AuthService
+
+settings = get_settings()
+auth_service = AuthService(settings)
+app = FastAPI(title=settings.app_name, version="1.0.0")
+
+# CORS can be restricted per deployment; defaults target localhost for demos.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://localhost", "http://localhost", "http://127.0.0.1"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+init_db()
+
+
+def _get_ip(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    client_host = request.client.host if request.client else "0.0.0.0"
+    return client_host
+
+
+@app.get("/health", tags=["health"])
+def healthcheck() -> dict:
+    return {"status": "ok"}
+
+
+@app.post("/auth/register", response_model=schemas.UserRead, status_code=status.HTTP_201_CREATED)
+def register_user(*, payload: schemas.UserCreate, db: Session = Depends(get_db)) -> schemas.UserRead:
+    user = auth_service.register_user(db, payload)
+    return schemas.UserRead.from_orm(user)
+
+
+@app.post("/auth/login")
+def login(
+    *,
+    payload: schemas.LoginRequest,
+    response: Response,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    metadata = auth_service.login(
+        db,
+        response=response,
+        payload=payload,
+        ip_address=_get_ip(request),
+        user_agent=request.headers.get("user-agent"),
+    )
+    return {"detail": "Autenticación exitosa", **metadata}
+
+
+@app.post("/auth/refresh")
+def refresh_token(*, response: Response, request: Request, db: Session = Depends(get_db)):
+    refresh_cookie = request.cookies.get(settings.refresh_token_cookie_name)
+    if not refresh_cookie:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token faltante")
+
+    metadata = auth_service.refresh(
+        db=db,
+        response=response,
+        refresh_token=refresh_cookie,
+        ip_address=_get_ip(request),
+        user_agent=request.headers.get("user-agent"),
+    )
+    return {"detail": "Tokens renovados", **metadata}
+
+
+@app.post("/auth/logout")
+def logout(
+    *,
+    request: Request,
+    response: Response,
+    csrf_token: str = Depends(require_csrf),
+    db: Session = Depends(get_db),
+):
+    _ = csrf_token  # dependency already validated
+    auth_service.logout(
+        db=db,
+        response=response,
+        refresh_token=request.cookies.get(settings.refresh_token_cookie_name),
+        ip_address=_get_ip(request),
+        user_agent=request.headers.get("user-agent"),
+    )
+    return {"detail": "Sesión finalizada"}
+
+
+@app.post("/auth/change-password")
+def change_password(
+    *,
+    payload: schemas.ChangePasswordRequest,
+    user: models.User = Depends(require_active_user),
+    response: Response,
+    request: Request,
+    csrf_token: str = Depends(require_csrf),
+    db: Session = Depends(get_db),
+):
+    _ = csrf_token
+    auth_service.change_password(
+        db=db,
+        user=user,
+        payload=payload,
+        response=response,
+        ip_address=_get_ip(request),
+        user_agent=request.headers.get("user-agent"),
+    )
+    return {"detail": "Contraseña actualizada"}
+
+
+@app.get("/auth/me", response_model=schemas.UserRead)
+def read_profile(user: models.User = Depends(get_current_user)) -> schemas.UserRead:
+    return schemas.UserRead.from_orm(user)
+
+
+@app.get("/auth/logs", response_model=List[schemas.AuditLogRead])
+def read_logs(user: models.User = Depends(require_active_user), db: Session = Depends(get_db)) -> List[schemas.AuditLogRead]:
+    rows = (
+        db.query(models.AuthLog)
+        .filter(models.AuthLog.user_id == user.id)
+        .order_by(models.AuthLog.created_at.desc())
+        .limit(20)
+        .all()
+    )
+    return [schemas.AuditLogRead.from_orm(row) for row in rows]

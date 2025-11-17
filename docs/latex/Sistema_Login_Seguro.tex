@@ -1,0 +1,43 @@
+\documentclass[12pt,a4paper]{article}
+\usepackage[spanish]{babel}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{geometry}
+\usepackage{setspace}
+\usepackage{hyperref}
+\geometry{margin=2.5cm}
+\setstretch{1.15}
+\usepackage{helvet}
+\renewcommand{\familydefault}{\sfdefault}
+\title{Sistema de Login Seguro}
+\author{Santiago Barron, Candela Castillo, Facundo Vulcano}
+\date{Marzo 2025}
+\begin{document}
+\maketitle
+\section{Introducción y alcance}
+El objetivo de este trabajo es diseñar e implementar un sistema de autenticación web seguro para una aplicación mínima de gestión de usuarios. El énfasis está en la seguridad del proceso de autenticación---registro, login, rotación y revocación de tokens, logout y cambio de contraseña---por encima de la lógica de negocio.
+\section{Requisitos del sistema}
+\subsection{Requisitos funcionales}
+El servicio permite registrar usuarios mediante correo verificable, contraseña fuerte y nombre. El correo se valida en formato y unicidad, y las contraseñas se almacenan exclusivamente como hashes Argon2id.
+Durante el login se emiten un \emph{access token} de corta duración y un \emph{refresh token} con mayor vida útil. Ambos viajan en cookies \texttt{HttpOnly} y \texttt{Secure}. Los mensajes de error nunca revelan si falló el correo o la contraseña, minimizando filtraciones.
+El endpoint de logout invalida el refresh token activo y expira las cookies del cliente. La rotación de tokens ocurre en \texttt{/auth/refresh}: se valida el refresh token, se emite un nuevo par (access+refresh), se revoca el anterior y se almacena el nuevo identificador \texttt{jti}. La reutilización de un refresh token se considera comprometida y desencadena revocación global.
+El cambio de contraseña sólo está disponible para usuarios autenticados y requiere contraseña actual, nueva contraseña validada contra políticas de complejidad y revocación de todos los refresh tokens vigentes.
+\subsection{Requisitos no funcionales}
+El sistema utiliza algoritmos modernos (Argon2id para contraseñas y HS256 para JWT) y controles frente a fuerza bruta, CSRF, XSS y reutilización de tokens. La base de datos centraliza usuarios, tokens de refresco y eventos de auditoría, evitando estado en memoria y favoreciendo escalabilidad horizontal. Las pruebas automatizadas cubren hashing/verificación de contraseñas, emisión/rotación de JWT y el bloqueo de sesiones.
+\section{Arquitectura}
+La solución se compone de un frontend ligero (fuera del alcance de este entregable), una API construida con FastAPI, SQLite/SQLAlchemy como almacenamiento y un gestor de secretos externo sugerido para producción. Los tokens se manejan siempre por medio de cookies \texttt{HttpOnly}, evitando almacenamiento en \emph{local storage}.
+\section{Modelo de datos}
+La tabla \texttt{users} contiene el UUID del usuario, correo, hash Argon2id, nombre, bit de actividad, contadores de intentos fallidos, fechas clave y bandera de bloqueo temporal. La tabla \texttt{refresh\_tokens} persiste: usuario, \texttt{jti}, fecha de emisión, expiración relativa, expiración absoluta de sesión, datos de agente e IP, además de referencias encadenadas para la rotación. La tabla \texttt{auth\_logs} almacena evento, IP, agente y metadatos en JSON.
+\section{Flujos principales}
+\textbf{Registro}: valida formato de correo, complejidad de la contraseña y unicidad antes de persistir. Se devuelve confirmación sin iniciar sesión automáticamente.
+\textbf{Login}: compara la contraseña Argon2id, actualiza último acceso, emite tokens y registra el evento. El middleware de autenticación valida el access token en cada recurso protegido.
+\textbf{Refresh}: exige el refresh token desde cookie \texttt{HttpOnly}, verifica firma y estado en base de datos; en caso de éxito emite un nuevo par y marca el token previo como reemplazado.
+\textbf{Logout}: revoca el refresh token actual y fuerza la expiración de cookies.
+\textbf{Cambio de contraseña}: valida la contraseña actual, verifica la nueva contra políticas explícitas y revoca todas las sesiones activas.
+\section{Criptografía y sesiones}
+Cada contraseña se combina con un salt aleatorio y un \emph{pepper} opcional gestionado en el servidor. Los JWT incluyen los \emph{claims} \texttt{sub}, \texttt{iat}, \texttt{exp} y \texttt{jti}. Todo el tráfico debe cursarse sobre HTTPS para que las banderas \texttt{Secure} sean efectivas. El atributo \texttt{SameSite} se configura como \texttt{Lax} para el access token y \texttt{Strict} para el refresh.
+\section{Privacidad y retención}
+Se almacenan únicamente los datos indispensables: correo, hash de contraseña y nombre. Los tokens revocados se purgan tras su expiración y los logs de autenticación se retienen sólo el tiempo necesario para investigaciones de seguridad.
+\section{Conclusiones}
+El entregable demuestra un sistema completo con hashing robusto, gestión de sesiones basada en JWT + cookies seguras, rotación obligatoria de refresh tokens, controles anti-abuso y evidencias documentadas (pruebas automatizadas y capturas generadas en \texttt{docs/evidence}).
+\end{document}
