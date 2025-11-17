@@ -1,10 +1,12 @@
 """FastAPI entrypoint exposing the secure authentication flows."""
 from __future__ import annotations
 
+from pathlib import Path
 from typing import List
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 
 from . import models, schemas
@@ -27,6 +29,10 @@ app.add_middleware(
 )
 
 init_db()
+
+FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
+if FRONTEND_DIR.exists():
+    app.mount("/ui", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
 
 
 def _get_ip(request: Request) -> str:

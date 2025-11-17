@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sistema de Login Seguro</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Sistema de Login Seguro</h1>
+      <p>Demo interactiva de los flujos principales del backend</p>
+    </header>
+
+    <main>
+      <section>
+        <h2>Registro</h2>
+        <form id="register-form" class="card">
+          <label>Email <input type="email" name="email" required /></label>
+          <label>Nombre <input type="text" name="name" /></label>
+          <label>Contraseña <input type="password" name="password" required /></label>
+          <button type="submit">Crear cuenta</button>
+        </form>
+      </section>
+
+      <section>
+        <h2>Login</h2>
+        <form id="login-form" class="card">
+          <label>Email <input type="email" name="email" required /></label>
+          <label>Contraseña <input type="password" name="password" required /></label>
+          <button type="submit">Iniciar sesión</button>
+        </form>
+      </section>
+
+      <section class="grid">
+        <div class="card">
+          <h3>Refresh token</h3>
+          <button id="refresh-btn" type="button">Rotar tokens</button>
+        </div>
+        <div class="card">
+          <h3>Logout</h3>
+          <button id="logout-btn" type="button">Cerrar sesión</button>
+        </div>
+      </section>
+
+      <section>
+        <h2>Cambio de contraseña</h2>
+        <form id="password-form" class="card">
+          <label>Contraseña actual <input type="password" name="current_password" required /></label>
+          <label>Nueva contraseña <input type="password" name="new_password" required /></label>
+          <button type="submit">Actualizar contraseña</button>
+        </form>
+      </section>
+
+      <section class="grid">
+        <div class="card">
+          <h3>Perfil</h3>
+          <button id="me-btn" type="button">Obtener /auth/me</button>
+        </div>
+        <div class="card">
+          <h3>Logs recientes</h3>
+          <button id="logs-btn" type="button">Ver /auth/logs</button>
+        </div>
+      </section>
+
+      <section>
+        <h2>Resultado</h2>
+        <pre id="output" class="card"></pre>
+      </section>
+    </main>
+
+    <footer>
+      <small>Las solicitudes se envían al backend usando cookies HttpOnly + token CSRF.</small>
+    </footer>
+
+    <script src="app.js" type="module"></script>
+  </body>
+</html>

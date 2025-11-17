@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Optional
 
-from pydantic import BaseModel, EmailStr, Field, validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 
 class Message(BaseModel):
@@ -25,8 +25,7 @@ class UserRead(BaseModel):
     created_at: datetime
     last_login_at: Optional[datetime]
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class LoginRequest(BaseModel):
@@ -56,8 +55,7 @@ class AuditLogRead(BaseModel):
     created_at: datetime
     details: Optional[dict[str, Any]]
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class PasswordResetRequest(BaseModel):
@@ -68,7 +66,8 @@ class PasswordResetConfirm(BaseModel):
     token: str
     new_password: str
 
-    @validator("new_password")
+    @field_validator("new_password")
+    @classmethod
     def validate_password(cls, value: str) -> str:
         if len(value) < 12:
             raise ValueError("La contraseña debe tener al menos 12 caracteres")

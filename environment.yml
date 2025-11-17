@@ -1,0 +1,20 @@
+name: secure-login
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.12
+  - pip
+  - openssl
+  - sqlite
+  - pip:
+      - fastapi==0.110.0
+      - uvicorn[standard]==0.27.0.post1
+      - SQLAlchemy==2.0.25
+      - passlib[argon2]==1.7.4
+      - python-jose[cryptography]==3.3.0
+      - email-validator==2.1.1
+      - pydantic-settings==2.3.1
+      - httpx==0.26.0
+      - pytest==8.0.0
+      - pillow==10.2.0

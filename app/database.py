@@ -2,19 +2,28 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Generator
 
 from sqlalchemy import create_engine
+from sqlalchemy.engine import make_url
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 from .config import get_settings
 
 settings = get_settings()
-engine = create_engine(
-    settings.database_url,
-    connect_args={"check_same_thread": False} if settings.database_url.startswith("sqlite") else {},
-    future=True,
-)
+database_url = settings.database_url
+url = make_url(database_url)
+connect_args = {}
+if url.drivername.startswith("sqlite"):
+    connect_args["check_same_thread"] = False
+    if url.database:
+        db_path = Path(url.database)
+        if not db_path.is_absolute():
+            db_path = Path.cwd() / db_path
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+
+engine = create_engine(database_url, connect_args=connect_args, future=True)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine, future=True)
 Base = declarative_base()
 

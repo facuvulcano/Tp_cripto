@@ -48,6 +48,10 @@ Variables clave (se pueden definir antes de ejecutar el script):
 | `GET /auth/me` | Devuelve los datos básicos del usuario autenticado. |
 | `GET /auth/logs` | Últimos eventos de auditoría asociados al usuario. |
 
+### Frontend interactivo
+
+El backend expone un frontend estático básico accesible en `http://localhost:8000/ui` (o el puerto que estés usando). Incluye formularios para registro, login, refresh, logout, cambio de contraseña, `/auth/me` y `/auth/logs`. Todas las peticiones se realizan con `fetch` y `credentials: 'include'`, por lo que es importante acceder al frontend desde el mismo origen donde corre el backend.
+
 ### Pruebas automatizadas
 
 ```bash
