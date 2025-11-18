@@ -77,8 +77,3 @@ El archivo `docs/evidence/test_results.txt` almacena la salida más reciente de 
 
 ## Documentación
 La especificación formal del trabajo se encuentra en `docs/latex/Sistema_Login_Seguro.tex`, lista para compilarse con `pdflatex`.
-
-## Próximos pasos sugeridos
-- Añadir flujo de recuperación de contraseña con token de un solo uso.
-- Integrar un almacén seguro de secretos (HashiCorp Vault, AWS Secrets Manager, etc.).
-- Automatizar despliegues y escaneos SAST/DAST para fortalecer el ciclo CI/CD.
