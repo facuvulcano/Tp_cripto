@@ -54,6 +54,12 @@ def register_user(*, payload: schemas.UserCreate, db: Session = Depends(get_db))
     return schemas.UserRead.from_orm(user)
 
 
+@app.get("/auth/verify-email", response_model=schemas.Message)
+def verify_email(token: str, db: Session = Depends(get_db)) -> schemas.Message:
+    auth_service.verify_email(db, token=token)
+    return schemas.Message(detail="Correo verificado")
+
+
 @app.post("/auth/login")
 def login(
     *,

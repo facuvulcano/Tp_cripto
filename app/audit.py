@@ -19,6 +19,8 @@ class AuthEvent(str, Enum):
     PASSWORD_CHANGED = "password_changed"
     PASSWORD_RESET_REQUEST = "password_reset_request"
     PASSWORD_RESET = "password_reset"
+    EMAIL_VERIFICATION_SENT = "email_verification_sent"
+    EMAIL_VERIFIED = "email_verified"
 
 
 def log_event(

@@ -5,6 +5,7 @@ Implementación de referencia para un backend de autenticación centrado en cont
 ## Características principales
 - **Hashing Argon2id** con parámetros reforzados (`t=3`, `m=65536`, `p=2`) y validaciones estrictas de complejidad de contraseña.
 - **JWT de doble capa**: access tokens de 5 minutos y refresh tokens de 7 días con rotación obligatoria, revocación persistida y límite absoluto de sesión.
+- **Verificación por correo** en el registro mediante token de un solo uso (los correos se guardan en `data/outbox/` para revisión local).
 - **Cookies seguras** (`HttpOnly`, `Secure`, `SameSite`) más token CSRF adicional para operaciones sensibles.
 - **Bloqueos inteligentes**: contador por cuenta, rate limiting por IP y revocación masiva automática en cambios de contraseña.
 - **Auditoría y trazabilidad** de eventos críticos (logins, refresh, fallos, logout, cambios de contraseña).
@@ -41,6 +42,7 @@ Variables clave (se pueden definir antes de ejecutar el script):
 | Método | Ruta | Descripción |
 | --- | --- | --- |
 | `POST /auth/register` | Alta de usuario (email único + nombre opcional). |
+| `GET /auth/verify-email` | Confirma el correo con el token recibido tras el registro. |
 | `POST /auth/login` | Valida credenciales, entrega cookies y registra auditoría. |
 | `POST /auth/refresh` | Valida refresh token, lo rota y revoca el anterior. |
 | `POST /auth/logout` | Revoca el refresh token activo y limpia cookies (requiere CSRF). |
@@ -48,6 +50,14 @@ Variables clave (se pueden definir antes de ejecutar el script):
 | `GET /auth/me` | Devuelve los datos básicos del usuario autenticado. |
 | `GET /auth/logs` | Últimos eventos de auditoría asociados al usuario. |
 
+### Flujos y endpoints implicados
+- **Registro**: `POST /auth/register` emite el correo de verificación; la confirmación se completa con `GET /auth/verify-email?token=...`.
+- **Login**: `POST /auth/login` valida credenciales y entrega cookies de sesión.
+- **Acceso a recursos**: cualquier ruta protegida (`/auth/me`, `/auth/logs`, etc.) va precedida por middleware que lee el access token; no requiere endpoint adicional.
+- **Refresh / rotación**: `POST /auth/refresh` recibe el refresh token en cookie, revoca el anterior y emite el nuevo par.
+- **Logout**: `POST /auth/logout` revoca el refresh token activo y limpia cookies (requiere CSRF).
+- **Cambio de contraseña**: `POST /auth/change-password` verifica la contraseña actual, aplica la nueva y revoca todos los refresh tokens.
+- **Bloqueo y auditoría**: el bloqueo por intentos fallidos y los registros se gestionan en `POST /auth/login` y se consultan vía `GET /auth/logs` (no hay endpoint separado de bloqueo).
 ### Frontend interactivo
 
 El backend expone un frontend estático básico accesible en `http://localhost:8000/ui` (o el puerto que estés usando). Incluye formularios para registro, login, refresh, logout, cambio de contraseña, `/auth/me` y `/auth/logs`. Todas las peticiones se realizan con `fetch` y `credentials: 'include'`, por lo que es importante acceder al frontend desde el mismo origen donde corre el backend.

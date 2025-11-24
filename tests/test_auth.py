@@ -5,6 +5,7 @@ import os
 import sys
 from http.cookies import SimpleCookie
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 from fastapi import HTTPException
@@ -12,6 +13,7 @@ from starlette.responses import Response
 
 os.environ.setdefault("DATABASE_URL", "sqlite:///./data/test.db")
 os.environ.setdefault("JWT_SECRET_KEY", "test-secret-key")
+os.environ.setdefault("EMAIL_OUTBOX_DIR", "./data/test_outbox")
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))
@@ -31,6 +33,11 @@ def reset_database() -> None:
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
     rate_limiter._windows.clear()
+    outbox_dir = Path(settings.email_outbox_dir)
+    if outbox_dir.exists():
+        for file in outbox_dir.glob("*.eml"):
+            file.unlink()
+    service.email_service.last_message = None
 
 
 @pytest.fixture()
@@ -71,6 +78,23 @@ def test_register_and_login_flow(db_session) -> None:
     assert "refresh_token_id" in metadata
     assert _cookie_from_response(response, settings.access_token_cookie_name)
     assert _cookie_from_response(response, settings.refresh_token_cookie_name)
+
+
+def test_register_sends_verification_email(db_session) -> None:
+    user = _register_user(db_session, "verify@example.com", "Secreta123!XYZ")
+    message = service.email_service.last_message
+    assert message is not None
+    assert message["to"] == user.email
+    assert "token=" in message["body"]
+
+    verification_line = [line for line in message["body"].splitlines() if "token=" in line][0].strip()
+    params = parse_qs(urlparse(verification_line).query)
+    token = params.get("token", [None])[0]
+    assert token
+
+    service.verify_email(db_session, token=token)
+    db_session.refresh(user)
+    assert user.is_verified is True
 
 
 def test_refresh_rotates_tokens(db_session) -> None:

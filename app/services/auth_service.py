@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import re
+import hashlib
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -13,6 +14,7 @@ from sqlalchemy.orm import Session
 from .. import models, schemas
 from ..audit import AuthEvent, log_event
 from ..config import Settings, get_settings
+from ..email_service import EmailService
 from ..rate_limiter import rate_limiter
 from ..security import (
     TokenError,
@@ -30,8 +32,9 @@ logger = logging.getLogger(__name__)
 
 
 class AuthService:
-    def __init__(self, settings: Settings | None = None) -> None:
+    def __init__(self, settings: Settings | None = None, email_service: EmailService | None = None) -> None:
         self.settings = settings or get_settings()
+        self.email_service = email_service or EmailService(self.settings)
 
     # -------------------- Registration --------------------
     def register_user(self, db: Session, payload: schemas.UserCreate) -> models.User:
@@ -50,6 +53,9 @@ class AuthService:
         db.add(user)
         db.commit()
         db.refresh(user)
+        token = self._create_verification_token(db, user)
+        self.email_service.send_verification_email(to_email=user.email, token=token)
+        log_event(db, event_type=AuthEvent.EMAIL_VERIFICATION_SENT, user_id=user.id)
         return user
 
     # -------------------- Login --------------------
@@ -224,6 +230,35 @@ class AuthService:
             user_agent=user_agent,
         )
 
+    # -------------------- Email verification --------------------
+    def verify_email(self, db: Session, *, token: str) -> None:
+        token_hash = self._hash_token(token)
+        record = (
+            db.query(models.EmailVerificationToken)
+            .filter(models.EmailVerificationToken.token_hash == token_hash)
+            .first()
+        )
+        now = datetime.now(timezone.utc)
+        if not record:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Token inválido")
+        if record.used_at:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Token ya utilizado")
+        expires_at = record.expires_at
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        if now > expires_at:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Token expirado")
+
+        user = record.user
+        if not user:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cuenta no disponible")
+        user.is_verified = True
+        record.used_at = now
+        db.add_all([user, record])
+        db.commit()
+
+        log_event(db, event_type=AuthEvent.EMAIL_VERIFIED, user_id=user.id)
+
     # -------------------- Helpers --------------------
     def _issue_tokens(
         self,
@@ -352,3 +387,15 @@ class AuthService:
             token.revoked_at = now
         db.bulk_save_objects(tokens)
         db.commit()
+
+    def _create_verification_token(self, db: Session, user: models.User) -> str:
+        token = generate_token_identifier()
+        token_hash = self._hash_token(token)
+        expires_at = datetime.now(timezone.utc) + timedelta(minutes=self.settings.verification_token_exp_minutes)
+        record = models.EmailVerificationToken(user_id=user.id, token_hash=token_hash, expires_at=expires_at)
+        db.add(record)
+        db.commit()
+        return token
+
+    def _hash_token(self, token: str) -> str:
+        return hashlib.sha256(token.encode("utf-8")).hexdigest()

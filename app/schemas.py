@@ -22,6 +22,7 @@ class UserRead(BaseModel):
     email: EmailStr
     name: Optional[str]
     is_active: bool
+    is_verified: bool
     created_at: datetime
     last_login_at: Optional[datetime]
 
