@@ -6,12 +6,13 @@
 \usepackage{geometry}
 \usepackage{setspace}
 \usepackage{hyperref}
+\usepackage{helvet}
+\usepackage{booktabs}
 
 \geometry{margin=2.5cm}
 \setstretch{1.15}
 
 % Fuente sans serif tipo Arial/Helvetica
-\usepackage{helvet}
 \renewcommand{\familydefault}{\sfdefault}
 
 \title{Sistema de Login Seguro}
@@ -24,9 +25,9 @@
 
 \section{Introducción y alcance}
 
-El objetivo de este trabajo es diseñar un sistema de autenticación web seguro para una aplicación web mínima de gestión de usuarios. El foco no está en la funcionalidad de negocio de la aplicación, sino en la seguridad del proceso de autenticación, abarcando registro de usuarios, inicio y cierre de sesión, gestión de sesiones, rotación y renovación de tokens, y cambio de contraseña.
+El objetivo de este trabajo es diseñar un sistema de autenticación web seguro para una aplicación web mínima de gestión de usuarios. El foco no está en la funcionalidad de negocio de la aplicación, sino en la seguridad del proceso de autenticación, abarcando registro de usuarios, verificación de correo electrónico, inicio y cierre de sesión, gestión de sesiones, rotación y renovación de tokens, cambio y recuperación de contraseña y controles adicionales como \textit{rate limiting}, bloqueos y autenticación multifactor (MFA).
 
-El diseño propuesto integra hashing seguro de contraseñas, gestión de sesiones basada en tokens JWT con \emph{access tokens} de corta duración y \emph{refresh tokens} con rotación obligatoria y revocación, controles preventivos de seguridad (por ejemplo, protección frente a fuerza bruta y CSRF) y políticas explícitas de privacidad, minimización de datos y retención/borrado.
+El diseño propuesto integra hashing seguro de contraseñas, gestión de sesiones basada en tokens JWT con \emph{access tokens} de corta duración y \emph{refresh tokens} con rotación obligatoria y revocación, controles preventivos de seguridad (por ejemplo, protección frente a fuerza bruta, CSRF y XSS), mecanismos de MFA y políticas explícitas de privacidad, minimización de datos y retención/borrado.
 
 \section{Requisitos del sistema}
 
@@ -34,49 +35,174 @@ El diseño propuesto integra hashing seguro de contraseñas, gestión de sesione
 
 En cuanto al \textbf{registro de usuario}, el sistema debe permitir crear una cuenta a partir de un correo electrónico válido y verificable, una contraseña y un conjunto mínimo de datos de perfil (como, por ejemplo, el nombre del usuario). Es requisito que el correo electrónico no se encuentre previamente registrado y que las contraseñas se almacenen únicamente como hashes seguros, sin conservar nunca el valor en claro.
 
-En el \textbf{proceso de login}, el usuario debe poder autenticarse mediante correo electrónico y contraseña. Cuando las credenciales son correctas, el sistema emite un access token JWT de corta duración y un refresh token JWT de mayor duración, que se devuelven al cliente mediante cookies seguras marcadas como \texttt{HttpOnly}. En caso de credenciales inválidas, la respuesta debe ser un mensaje genérico de error, sin indicar cuál de los datos falló, para no filtrar información innecesaria.
+Como parte del registro, el sistema envía un \textbf{correo de verificación} al usuario. Este correo contiene un enlace con un token de verificación de un solo uso; al acceder a dicho enlace (endpoint \texttt{GET /auth/verify-email?token=...}), la cuenta queda marcada como verificada. Opcionalmente se puede impedir el login hasta que el correo haya sido verificado, o bien permitirlo con ciertas restricciones.
 
-El sistema debe ofrecer un mecanismo de \textbf{logout} que permita invalidar la sesión del usuario. Para ello se define un endpoint de cierre de sesión que anula el refresh token asociado (marcándolo como revocado en el servidor) y hace expirar las cookies de sesión en el cliente, de modo que no puedan reutilizarse.
+En el \textbf{proceso de login}, el usuario debe poder autenticarse mediante correo electrónico y contraseña a través del endpoint \texttt{POST /auth/login}. Cuando las credenciales son correctas, el sistema emite un access token JWT de corta duración y un refresh token JWT de mayor duración, que se devuelven al cliente mediante cookies seguras marcadas como \texttt{HttpOnly}. En caso de credenciales inválidas, la respuesta debe ser un mensaje genérico de error, sin indicar cuál de los datos falló, para no filtrar información innecesaria.
 
-Respecto al \textbf{refresh y la rotación de tokens}, se expone un endpoint dedicado, por ejemplo \texttt{/auth/refresh}, que recibe el refresh token desde una cookie \texttt{HttpOnly}. Dicho token se valida comprobando su firma, fecha de expiración y estado (es decir, que no haya sido revocado ni reutilizado). Si la validación es exitosa, el sistema emite un nuevo par de tokens (access y refresh), revoca el refresh token anterior y registra el nuevo en la base de datos. Un refresh token reutilizado debe considerarse comprometido y, en consecuencia, ser rechazado y revocado.
+El sistema contempla \textbf{autenticación multifactor (MFA)} opcional. Los usuarios pueden habilitar MFA basado en TOTP (por ejemplo, usando una aplicación de autenticación) mediante endpoints dedicados de alta y confirmación. Cuando MFA está activo, el flujo de login exige, además de la contraseña, un código de un solo uso generado por el segundo factor; en caso contrario, el login se rechaza.
 
-El sistema incluye un flujo de \textbf{cambio de contraseña} accesible sólo para usuarios autenticados. Para completar este flujo, el usuario debe proporcionar su contraseña actual y la nueva contraseña deseada. La aplicación verifica la contraseña actual, valida que la nueva cumpla los requisitos mínimos de complejidad y actualiza el hash almacenado. Como medida de seguridad adicional, se revocan todos los refresh tokens activos del usuario, forzando el cierre de sesión en todos los dispositivos.
+El sistema debe ofrecer un mecanismo de \textbf{logout} que permita invalidar la sesión del usuario. Para ello se define un endpoint de cierre de sesión (\texttt{POST /auth/logout}) que anula el refresh token asociado (marcándolo como revocado en el servidor) y hace expirar las cookies de sesión en el cliente, de modo que no puedan reutilizarse.
 
-Finalmente, se prevé una \textbf{gestión de bloqueo y recuperación}. Ante múltiples intentos fallidos de login, el sistema puede bloquear temporalmente los intentos desde una misma dirección IP o para una misma cuenta, reduciendo el impacto de ataques de fuerza bruta o \emph{credential stuffing}. Opcionalmente se puede incluir un flujo de recuperación de contraseña mediante un token de un solo uso enviado al correo del usuario. Todas estas acciones quedan registradas en un módulo de \textbf{auditoría}, donde se guardan eventos como logins exitosos y fallidos, cambios de contraseña, uso de refresh tokens y revocación de tokens.
+Respecto al \textbf{refresh y la rotación de tokens}, se expone un endpoint dedicado, \texttt{POST /auth/refresh}, que recibe el refresh token desde una cookie \texttt{HttpOnly}. Dicho token se valida comprobando su firma, fecha de expiración y estado (es decir, que no haya sido revocado ni reutilizado). Si la validación es exitosa, el sistema emite un nuevo par de tokens (access y refresh), revoca el refresh token anterior y registra el nuevo en la base de datos. Un refresh token reutilizado debe considerarse comprometido y, en consecuencia, ser rechazado y revocado.
+
+El sistema incluye un flujo de \textbf{cambio de contraseña autenticado} (\texttt{POST /auth/change-password}) accesible sólo para usuarios autenticados. Para completar este flujo, el usuario debe proporcionar su contraseña actual y la nueva contraseña deseada. La aplicación verifica la contraseña actual, valida que la nueva cumpla los requisitos mínimos de complejidad y actualiza el hash almacenado. Como medida de seguridad adicional, se revocan todos los refresh tokens activos del usuario, forzando el cierre de sesión en todos los dispositivos.
+
+Además, se incorpora un flujo explícito de \textbf{recuperación de contraseña por olvido}. El endpoint \texttt{POST /auth/forgot-password} recibe un correo electrónico; si el usuario existe, el sistema genera un token de reseteo de un solo uso, lo almacena de forma segura y envía al correo un enlace hacia la interfaz de cambio de contraseña. El endpoint \texttt{POST /auth/reset-password} recibe el token y la nueva contraseña, valida el token (firma, expiración, no uso previo), actualiza el hash de contraseña y revoca todos los tokens de refresco del usuario.
+
+Finalmente, se prevé una \textbf{gestión de bloqueo y recuperación}. Ante múltiples intentos fallidos de login, el sistema puede bloquear temporalmente los intentos para una misma cuenta, reduciendo el impacto de ataques de fuerza bruta o \emph{credential stuffing}. Este bloqueo se complementa con \textbf{rate limiting} a nivel de IP o combinación IP+endpoint, de forma que se limite el número de intentos por ventana de tiempo. Opcionalmente se puede incluir un flujo de desbloqueo asistido (por ejemplo, notificando al usuario por correo ante un bloqueo). Todas estas acciones quedan registradas en un módulo de \textbf{auditoría}, donde se guardan eventos como logins exitosos y fallidos, cambios de contraseña, uso de refresh tokens y revocación de tokens.
 
 \subsection{Requisitos no funcionales}
 
-Desde el punto de vista de \textbf{seguridad}, el sistema debe emplear algoritmos criptográficos modernos y considerados seguros. Para las contraseñas se adopta un esquema de hashing basado en Argon2id, mientras que los tokens JWT se firman con algoritmos como HS256 o ES256. El diseño contempla protecciones frente a ataques habituales, como fuerza bruta, CSRF, XSS, \emph{session fixation} y reutilización de tokens de refresco, y se apoya en una gestión segura de secretos (claves de firma y posibles \emph{peppers}) mediante variables de entorno y, preferentemente, un gestor de secretos externo.
+Desde el punto de vista de \textbf{seguridad}, el sistema debe emplear algoritmos criptográficos modernos y considerados seguros. Para las contraseñas se adopta un esquema de hashing basado en Argon2id, mientras que los tokens JWT se firman con algoritmos como HS256 o ES256. El diseño contempla protecciones frente a ataques habituales, como fuerza bruta, CSRF, XSS, \emph{session fixation}, reutilización de tokens de refresco y abuso de los flujos de recuperación de contraseña. La gestión de secretos (claves de firma, \emph{peppers}, claves de cifrado de secretos MFA) se realiza mediante variables de entorno y, preferentemente, un gestor de secretos externo.
 
-En términos de \textbf{disponibilidad}, el sistema debe seguir funcionando aun cuando se invaliden conjuntos de tokens, y la verificación de los mismos debe ser lo suficientemente eficiente como para soportar un volumen razonable de peticiones concurrentes. La \textbf{escalabilidad} se garantiza evitando mantener estado de sesión en memoria local de un único servidor; en su lugar, la información relativa a refresh tokens y revocación se almacena en una base de datos central accesible desde todas las réplicas del backend.
+En términos de \textbf{disponibilidad}, el sistema debe seguir funcionando aun cuando se invaliden conjuntos de tokens, y la verificación de los mismos debe ser lo suficientemente eficiente como para soportar un volumen razonable de peticiones concurrentes. La \textbf{escalabilidad} se garantiza evitando mantener estado de sesión en memoria local de un único servidor; en su lugar, la información relativa a refresh tokens, tokens de verificación de correo y tokens de reseteo de contraseña se almacena en una base de datos central accesible desde todas las réplicas del backend. El \textbf{rate limiting} se puede implementar en el backend y/o en un proxy inverso (NGINX, API Gateway), idealmente sobre un almacén compartido (por ejemplo, Redis) para mantener consistencia entre instancias.
 
-La \textbf{mantenibilidad} se favorece mediante una organización modular del código: se distinguen claramente la capa de control (endpoints HTTP), la lógica de autenticación, la capa de persistencia y los componentes de utilidades criptográficas. Sobre estas piezas se construyen pruebas automatizadas para las funciones críticas (hashing y verificación de contraseñas, emisión y verificación de JWT, lógica de rotación de tokens). Por último, la \textbf{privacidad y el cumplimiento} se consideran requisitos transversales: el diseño promueve la minimización de datos personales, la definición de una política clara de retención y la posibilidad de borrar o anonimizar la información del usuario cuando corresponda.
+La \textbf{mantenibilidad} se favorece mediante una organización modular del código: se distinguen claramente la capa de control (endpoints HTTP), la lógica de autenticación, la capa de persistencia y los componentes de utilidades criptográficas y de envío de correo. Sobre estas piezas se construyen pruebas automatizadas para las funciones críticas (hashing y verificación de contraseñas, emisión y verificación de JWT, lógica de rotación de tokens, generación y consumo de tokens de un solo uso). Por último, la \textbf{privacidad y el cumplimiento} se consideran requisitos transversales: el diseño promueve la minimización de datos personales, la definición de una política clara de retención y la posibilidad de borrar o anonimizar la información del usuario cuando corresponda.
 
 \section{Arquitectura propuesta}
 
-La arquitectura lógica del sistema se compone, en términos generales, de un \textbf{frontend web}, una \textbf{API backend}, una \textbf{base de datos relacional} y un \textbf{gestor de secretos}. El frontend ofrece las interfaces de usuario para registro, inicio de sesión, cambio de contraseña y otras operaciones básicas. Es importante destacar que el frontend no gestiona directamente los tokens de autenticación: en lugar de almacenarlos en almacenamiento local, confía en cookies \texttt{HttpOnly} gestionadas por el navegador, lo que reduce la superficie expuesta a ataques XSS.
+La arquitectura lógica del sistema se compone, en términos generales, de un \textbf{frontend web}, una \textbf{API backend}, una \textbf{base de datos relacional}, un \textbf{gestor de secretos} y un \textbf{servicio de correo electrónico}. El frontend ofrece las interfaces de usuario para registro, verificación de correo, inicio de sesión, cambio y recuperación de contraseña y otras operaciones básicas. Es importante destacar que el frontend no gestiona directamente los tokens de autenticación: en lugar de almacenarlos en almacenamiento local, confía en cookies \texttt{HttpOnly} gestionadas por el navegador, lo que reduce la superficie expuesta a ataques XSS.
 
-El backend expone una serie de endpoints REST, tales como \texttt{/auth/register}, \texttt{/auth/login}, \texttt{/auth/logout}, \texttt{/auth/refresh} y \texttt{/auth/change-password}. Internamente se organiza en servicios o módulos, entre los que se destacan: un servicio de autenticación que implementa la lógica de negocio relacionada con el login y logout; un servicio criptográfico responsable del hashing y la verificación de contraseñas; un servicio de tokens que se ocupa de la emisión, validación y rotación de JWT; y repositorios de acceso a datos para usuarios y tokens. La base de datos almacena la información persistente necesaria, mientras que el gestor de secretos conserva de manera segura las claves de firma de los JWT y, en su caso, el \emph{pepper} utilizado en el hashing de contraseñas.
+El backend, implementado con FastAPI, expone una serie de endpoints REST, tales como:
+\begin{itemize}
+  \item \texttt{POST /auth/register}: registro de usuario.
+  \item \texttt{GET /auth/verify-email}: verificación de correo electrónico.
+  \item \texttt{POST /auth/login}: autenticación (contraseña + MFA opcional).
+  \item \texttt{POST /auth/refresh}: refresco y rotación de tokens.
+  \item \texttt{POST /auth/logout}: cierre de sesión.
+  \item \texttt{POST /auth/change-password}: cambio de contraseña autenticado.
+  \item \texttt{POST /auth/forgot-password}: inicio del flujo de recuperación.
+  \item \texttt{POST /auth/reset-password}: confirmación de recuperación.
+  \item \texttt{GET /auth/me}: lectura del perfil autenticado.
+  \item \texttt{GET /auth/logs}: consulta de eventos de autenticación del usuario.
+  \item Endpoints adicionales de MFA (por ejemplo, \texttt{/auth/mfa/setup}, \texttt{/auth/mfa/confirm}, \texttt{/auth/mfa/disable}) para alta y gestión del segundo factor.
+\end{itemize}
+
+Internamente, el backend se organiza en servicios o módulos, entre los que se destacan: un servicio de autenticación que implementa la lógica de negocio relacionada con el login, logout y gestión de contraseñas; un servicio criptográfico responsable del hashing y la verificación de contraseñas, generación de tokens de un solo uso y validación de TOTP; un servicio de tokens que se ocupa de la emisión, validación y rotación de JWT; un servicio de correo para el envío de enlaces de verificación y recuperación; y repositorios de acceso a datos para usuarios, tokens y logs. La base de datos almacena la información persistente necesaria, mientras que el gestor de secretos conserva de manera segura las claves de firma de los JWT, posibles \emph{peppers} para el hashing de contraseñas y claves utilizadas para cifrar secretos de MFA.
 
 En cuanto al patrón de autenticación, se adopta el enfoque de \emph{access token} combinado con \emph{refresh token}. El access token es un JWT de vida corta (del orden de algunos minutos) que se utiliza para autorizar las peticiones a recursos protegidos. El refresh token, por su parte, tiene una vida útil más extensa (por ejemplo, varias semanas) y se emplea exclusivamente para obtener nuevos access tokens a través del endpoint de refresco. Ambos tokens se transmiten y almacenan en cookies marcadas como \texttt{HttpOnly} y \texttt{Secure}, con políticas \texttt{SameSite} configuradas de forma apropiada.
 
+Sobre la API se aplica un \textbf{rate limiting} básico para limitar, por ejemplo, el número de intentos de login y refresco por IP y ventana de tiempo. Esto se puede implementar como un middleware o como dependencias específicas sobre ciertos endpoints críticos.
+
 \section{Modelo de datos}
 
-El modelo de datos se basa en unas pocas entidades principales. La tabla \texttt{users} contiene la información básica de los usuarios registrados: un identificador primario de tipo UUID, el correo electrónico (definido como campo único e indexado), el hash de la contraseña generado con Argon2id, un posible campo de \texttt{salt} si la implementación lo requiere de forma explícita, un nombre opcional, marcas de tiempo de creación y actualización, un campo de último login y un indicador booleano de si la cuenta está activa. De esta forma se almacena únicamente la información mínima necesaria para autenticar al usuario, evitando mantener la contraseña en claro o datos de perfil excesivamente sensibles.
+El modelo de datos se basa en unas pocas entidades principales.
 
-La gestión de los tokens de refresco se realiza a través de la tabla \texttt{refresh\_tokens}, que vincula cada token con un usuario concreto. Esta tabla almacena un identificador interno, el identificador del usuario, un identificador de token (\texttt{token\_id}) que coincide con el claim \texttt{jti} embebido en el JWT, la fecha de emisión, la fecha de expiración, un posible campo de revocación (\texttt{revoked\_at}), una referencia al token que lo reemplaza en caso de rotación (\texttt{replaced\_by}) y, opcionalmente, información sobre el agente de usuario y la dirección IP. Este esquema permite implementar revocación, rotación encadenada y auditoría de sesiones activas.
+La tabla \texttt{users} contiene la información básica de los usuarios registrados:
+\begin{itemize}
+  \item Identificador primario de tipo UUID.
+  \item Correo electrónico (campo único e indexado).
+  \item Hash de la contraseña generado con Argon2id y, si la implementación lo requiere, un campo explícito de \texttt{salt}.
+  \item Nombre opcional.
+  \item Indicador booleano \texttt{is\_email\_verified} para saber si el correo fue verificado.
+  \item Campos relacionados con MFA: \texttt{mfa\_enabled} (booleano) y un campo \texttt{mfa\_secret} cifrado o protegido, asociado al secreto TOTP.
+  \item Contadores y estado para bloqueos: \texttt{failed\_login\_attempts} y \texttt{locked\_until}.
+  \item Marcas de tiempo de creación y actualización, campo de último login y un indicador booleano de si la cuenta está activa.
+\end{itemize}
+De esta forma se almacena únicamente la información mínima necesaria para autenticar al usuario, evitando mantener la contraseña en claro o datos de perfil excesivamente sensibles.
 
-Para registrar eventos de autenticación se propone la tabla \texttt{auth\_logs}, que almacena un identificador, una referencia opcional al usuario (en caso de que el evento esté asociado a una cuenta existente), el tipo de evento (por ejemplo, login exitoso, login fallido, refresco exitoso o fallido, cambio de contraseña), la marca de tiempo, la dirección IP, el \emph{user agent} y un campo de metadatos en formato JSON. De forma opcional, puede añadirse una tabla \texttt{password\_reset\_tokens} para soportar flujos de recuperación de contraseña mediante enlaces temporales, con campos para el identificador, el usuario asociado, el token (o su hash), la fecha de expiración y el momento de uso.
+La gestión de los tokens de refresco se realiza a través de la tabla \texttt{refresh\_tokens}, que vincula cada token con un usuario concreto. Esta tabla almacena:
+\begin{itemize}
+  \item Un identificador interno.
+  \item El identificador del usuario.
+  \item Un identificador de token (\texttt{token\_id}) que coincide con el claim \texttt{jti} embebido en el JWT.
+  \item La fecha de emisión y la fecha de expiración.
+  \item Un campo de revocación (\texttt{revoked\_at}) y una referencia al token que lo reemplaza en caso de rotación (\texttt{replaced\_by}).
+  \item Opcionalmente, información sobre el agente de usuario y la dirección IP.
+\end{itemize}
+Este esquema permite implementar revocación, rotación encadenada y auditoría de sesiones activas.
+
+Para registrar eventos de autenticación se propone la tabla \texttt{auth\_logs}, que almacena un identificador, una referencia opcional al usuario (en caso de que el evento esté asociado a una cuenta existente), el tipo de evento (por ejemplo, login exitoso, login fallido, refresco exitoso o fallido, cambio de contraseña, bloqueo de cuenta), la marca de tiempo, la dirección IP, el \emph{user agent} y un campo de metadatos en formato JSON.
+
+La tabla \texttt{email\_verification\_tokens} soporta el flujo de verificación de correo electrónico. Sus campos incluyen: identificador, usuario asociado, hash del token (\texttt{token\_hash}), fecha de expiración y momento de uso (\texttt{used\_at}). Se almacena únicamente el hash del token, no el valor en claro.
+
+De forma análoga, la tabla \texttt{password\_reset\_tokens} soporta los flujos de recuperación de contraseña mediante enlaces temporales. Contiene: identificador, usuario asociado, hash del token, fecha de expiración, momento de uso y metadatos opcionales (IP, user agent). El token en claro sólo se envía al usuario en el enlace de correo y nunca se guarda directamente en la base de datos.
+
+En un entorno más avanzado se podrían incluir tablas auxiliares para MFA (por ejemplo, \texttt{user\_mfa\_factors}) en caso de soportar múltiples factores o dispositivos de segundo factor.
 
 \section{Flujos principales}
 
-En el \textbf{flujo de registro}, el usuario completa un formulario con su correo, contraseña y, eventualmente, su nombre. El backend valida el formato del correo, la complejidad de la contraseña y la unicidad del correo en la base de datos. A continuación genera un salt criptográficamente seguro y aplica Argon2id para obtener el hash de la contraseña, que se almacena en la tabla \texttt{users} junto con el resto de la información. Opcionalmente se envía un correo de verificación. El sistema responde confirmando el alta de la cuenta, sin iniciar sesión automáticamente para reducir el riesgo en caso de registros abusivos.
+\subsection{Flujo de registro y verificación de correo}
 
-En el \textbf{flujo de login}, el usuario envía sus credenciales al endpoint correspondiente. El backend localiza el usuario a partir del correo electrónico y, si la cuenta existe y está activa, aplica el mismo esquema de hashing a la contraseña recibida y compara el resultado con el hash almacenado. Una coincidencia válida y la ausencia de bloqueos por intentos fallidos permiten generar un access token JWT con un claim \texttt{sub} igual al identificador del usuario y una expiración corta, así como un refresh token con un \texttt{jti} único y una expiración más prolongada. El refresh token se registra en la tabla \texttt{refresh\_tokens} y ambos tokens se devuelven mediante cookies seguras. Además, se actualiza el campo de último login y se registra un evento de éxito en la tabla de logs.
+\begin{enumerate}
+  \item El usuario completa un formulario con su correo, contraseña y, eventualmente, su nombre. El frontend envía estos datos al endpoint \texttt{POST /auth/register}.
+  \item El backend valida el formato del correo, la complejidad de la contraseña y la unicidad del correo en la base de datos. A continuación genera un salt criptográficamente seguro y aplica Argon2id para obtener el hash de la contraseña, que se almacena en la tabla \texttt{users} con \texttt{is\_email\_verified = false}.
+  \item Se genera un token de verificación aleatorio de alta entropía, se calcula su hash y se almacena en \texttt{email\_verification\_tokens} con una fecha de expiración corta (por ejemplo, 24 horas).
+  \item El sistema envía un correo al usuario con un enlace del tipo \texttt{GET /auth/verify-email?token=<token>}.
+  \item Cuando el usuario hace clic en el enlace, el backend recibe el token, calcula su hash y busca el registro correspondiente. Si el token es válido, no ha expirado y no fue usado previamente, marca \texttt{is\_email\_verified = true} para el usuario y actualiza \texttt{used\_at} en la tabla de tokens.
+\end{enumerate}
 
-Cuando el cliente intenta acceder a un recurso protegido, un middleware de autenticación intercepta la petición, extrae el access token (desde la cookie o el encabezado HTTP), valida su firma, fecha de expiración y claims, y, si es válido, añade el identificador del usuario al contexto de la petición. En caso de que el token haya expirado, el cliente debe recurrir al \textbf{flujo de refresh}, invocando el endpoint \texttt{/auth/refresh}. En este flujo, el backend extrae el refresh token de la cookie, verifica su firma y sus atributos, localiza el registro correspondiente en la base de datos y comprueba que el token no haya sido revocado ni utilizado anteriormente para un refresco. Sólo si todas estas comprobaciones son satisfactorias se emite un nuevo par de tokens, se revoca el anterior y se registra el nuevo en la tabla. Así se garantiza que cada refresh token sólo pueda emplearse una vez, mitigando ataques de \emph{replay} si el token fuera interceptado.
+\subsection{Flujo de login con MFA opcional}
 
-El \textbf{logout} se implementa mediante un endpoint específico que, al ser invocado, obtiene el refresh token asociado a la sesión y lo marca como revocado en la base de datos. En la respuesta, las cookies de autenticación se devuelven con fechas de expiración en el pasado, de forma que el navegador las elimine. Tras este proceso, el cliente ya no puede renovar el access token, y los que sigan vivos expiran de manera natural. Para el \textbf{cambio de contraseña}, el usuario autenticado envía su contraseña actual y la nueva contraseña. El backend verifica la primera, valida la segunda según las políticas de complejidad definidas (longitud mínima, variedad de caracteres, etc.) y, en caso positivo, genera un nuevo hash Argon2id que reemplaza al anterior. Como parte de la operación, se revocan todos los refresh tokens activos del usuario, forzando el cierre de sesión en todos los dispositivos. Un correo de notificación puede completar el flujo como medida adicional de seguridad.
+\begin{enumerate}
+  \item El usuario envía sus credenciales al endpoint \texttt{POST /auth/login} en un cuerpo JSON que incluye al menos email y contraseña, y opcionalmente un código MFA si el usuario lo tiene habilitado.
+  \item El backend localiza el usuario a partir del correo electrónico y verifica:
+    \begin{itemize}
+      \item Que la cuenta existe, está activa y no se encuentra bloqueada (\texttt{locked\_until} en el pasado).
+      \item Opcionalmente, que el correo electrónico fue verificado.
+    \end{itemize}
+  \item Se aplica el mismo esquema de hashing a la contraseña recibida y se compara el resultado con el hash almacenado. Si no coinciden, se incrementa el contador \texttt{failed\_login\_attempts}. Si se supera un umbral configurable (por ejemplo, 5 intentos fallidos), se fija \texttt{locked\_until} con un valor en el futuro (por ejemplo, 15 minutos) y se registra un evento de bloqueo en \texttt{auth\_logs}.
+  \item Si el usuario tiene MFA habilitado, el backend exige un código TOTP válido. En caso de que el código falte o sea incorrecto, se rechaza el login con un error genérico y se registra el evento correspondiente.
+  \item Una coincidencia válida de credenciales (y, en su caso, del segundo factor), junto con la ausencia de bloqueos, permite generar un access token JWT con un claim \texttt{sub} igual al identificador del usuario y una expiración corta, así como un refresh token con un \texttt{jti} único y una expiración más prolongada. El refresh token se registra en la tabla \texttt{refresh\_tokens}.
+  \item Ambos tokens se devuelven mediante cookies seguras marcadas como \texttt{HttpOnly}, \texttt{Secure} y con políticas \texttt{SameSite} adecuadas. Además, se actualiza el campo de último login, se resetean los contadores de intentos fallidos y se registra un evento de éxito en la tabla de logs.
+\end{enumerate}
+
+\subsection{Acceso a recursos protegidos}
+
+Cuando el cliente intenta acceder a un recurso protegido (por ejemplo, \texttt{GET /auth/me} u otros endpoints de negocio), un middleware o dependencia de autenticación intercepta la petición, extrae el access token desde la cookie o el encabezado HTTP, valida su firma, fecha de expiración y claims, y, si es válido, añade el identificador del usuario al contexto de la petición. Si el token no está presente, es inválido o está expirado, la petición se rechaza con un código HTTP 401.
+
+\subsection{Flujo de refresh y rotación de tokens}
+
+En caso de que el access token haya expirado, el cliente debe recurrir al \textbf{flujo de refresh}, invocando el endpoint \texttt{POST /auth/refresh}. En este flujo:
+
+\begin{enumerate}
+  \item El backend extrae el refresh token de la cookie correspondiente.
+  \item Se verifica la firma JWT, la fecha de expiración y la presencia de un \texttt{jti} válido.
+  \item Se localiza el registro del token en la tabla \texttt{refresh\_tokens} mediante el \texttt{jti} y se comprueba que el token no haya sido revocado ni utilizado anteriormente para un refresco (según la política de rotación obligatoria).
+  \item Sólo si todas estas comprobaciones son satisfactorias se emite un nuevo par de tokens, se marca el anterior como revocado y se registra el nuevo en la tabla, enlazándolo mediante el campo \texttt{replaced\_by}. El nuevo par se devuelve en cookies seguras.
+\end{enumerate}
+
+De este modo se garantiza que cada refresh token sólo pueda emplearse una vez, mitigando ataques de \emph{replay} si el token fuera interceptado.
+
+\subsection{Flujo de logout}
+
+El \textbf{logout} se implementa mediante el endpoint \texttt{POST /auth/logout}, que requiere un token CSRF válido enviado en un encabezado separado. Al ser invocado:
+
+\begin{enumerate}
+  \item El backend obtiene el refresh token asociado a la sesión desde la cookie.
+  \item Marca dicho token como revocado en la base de datos.
+  \item Devuelve las cookies de autenticación con fechas de expiración en el pasado o con atributos que fuerzan su eliminación en el navegador.
+\end{enumerate}
+
+Tras este proceso, el cliente ya no puede renovar el access token, y los que sigan vivos expiran de manera natural.
+
+\subsection{Flujo de cambio de contraseña autenticado}
+
+Para el \textbf{cambio de contraseña}, el usuario autenticado envía su contraseña actual y la nueva contraseña al endpoint \texttt{POST /auth/change-password}. El flujo es:
+
+\begin{enumerate}
+  \item El backend verifica que la petición proviene de un usuario autenticado y que incluye un token CSRF válido.
+  \item Se valida que la contraseña actual coincida con el hash almacenado.
+  \item Se valida la nueva contraseña según las políticas de complejidad definidas (longitud mínima, variedad de caracteres, etc.).
+  \item En caso positivo, se genera un nuevo hash Argon2id que reemplaza al anterior.
+  \item Como parte de la operación, se revocan todos los refresh tokens activos del usuario, forzando el cierre de sesión en todos los dispositivos.
+  \item Se registra un evento de cambio de contraseña en \texttt{auth\_logs} y, opcionalmente, se envía un correo de notificación al usuario.
+\end{enumerate}
+
+\subsection{Flujo de recuperación por olvido de contraseña}
+
+Para el caso en que el usuario haya olvidado su contraseña, se define un flujo separado de recuperación:
+
+\begin{enumerate}
+  \item El usuario solicita la recuperación desde el frontend, proporcionando su correo electrónico. El frontend invoca \texttt{POST /auth/forgot-password}.
+  \item El backend responde siempre con un mensaje genérico (\emph{``si el correo existe, se enviará un enlace''}) para evitar ataques de enumeración de usuarios.
+  \item Si el correo corresponde a un usuario activo, se genera un token de reseteo aleatorio de alta entropía, se calcula su hash y se almacena en \texttt{password\_reset\_tokens} con una fecha de expiración corta (por ejemplo, 1 hora) y \texttt{used\_at = NULL}.
+  \item El sistema envía un correo al usuario con un enlace del tipo \texttt{https://frontend/reset-password?token=<token>}.
+  \item Desde el enlace, el usuario accede al formulario de reseteo y envía la nueva contraseña junto con el token al endpoint \texttt{POST /auth/reset-password}.
+  \item El backend valida el token calculando su hash y buscando el registro correspondiente; además comprueba que no esté expirado ni usado previamente.
+  \item Si el token es válido, se valida la nueva contraseña, se genera un nuevo hash Argon2id para el usuario, se marca el token como utilizado (\texttt{used\_at}) y se revocan todos los refresh tokens activos del usuario, cerrando las sesiones existentes.
+  \item Se registra el evento de reseteo de contraseña en \texttt{auth\_logs} y se puede enviar un correo de confirmación.
+\end{enumerate}
 
 \section{Decisiones relacionadas con criptografía}
 
@@ -84,26 +210,80 @@ El componente central de protección de credenciales es el esquema de \textbf{ha
 
 Para los \textbf{JWT}, el sistema utiliza algoritmos de firma como HS256, basados en una clave secreta de alta entropía, o bien esquemas asimétricos como ES256, donde el servidor conserva la clave privada y puede distribuir la clave pública para validación por parte de otros servicios. Los tokens incluyen claims básicos, como el identificador del usuario (\texttt{sub}), la fecha de emisión (\texttt{iat}), la fecha de expiración (\texttt{exp}) y el identificador único del token (\texttt{jti}) en el caso de los refresh. Las claves utilizadas para la firma se gestionan fuera del código fuente, preferentemente en un gestor de secretos o como variables de entorno protegidas.
 
+Los \textbf{tokens de un solo uso} usados para verificación de correo y reseteo de contraseña se generan con fuentes de aleatoriedad criptográficamente seguras (por ejemplo, 32 bytes aleatorios codificados en Base64 URL-safe). En la base de datos sólo se almacena un hash de estos tokens (por ejemplo, HMAC-SHA256 con una clave de servidor), lo que evita que un atacante que obtenga la base de datos pueda reutilizarlos. La expiración de estos tokens es corta y su uso es único.
+
+Para MFA se utilizan códigos TOTP estándar (por ejemplo, según RFC 6238), basados en un secreto compartido entre el servidor y el dispositivo del usuario. El secreto se genera con alta entropía, se almacena cifrado en la base de datos y se valida mediante una ventana de tiempo acotada para tolerar pequeños desfasajes de reloj.
+
 En lo relativo al \textbf{canal de comunicación}, todo el tráfico entre el cliente y el servidor pasa por HTTPS, requisito necesario para que la marca \texttt{Secure} de las cookies tenga sentido. La generación de salts, identificadores y demás valores aleatorios se apoya en generadores de números pseudoaleatorios criptográficamente seguros, evitando funciones de propósito general no aptas para aplicaciones de seguridad.
 
 \section{Gestión de sesiones}
 
-La gestión de sesiones se basa en la combinación de JWT y cookies seguras. Los tokens se almacenan en cookies marcadas como \texttt{HttpOnly}, lo que impide su lectura desde código JavaScript en el navegador y reduce el impacto potencial de vulnerabilidades XSS. La marca \texttt{Secure} exige que las cookies sólo se envíen sobre conexiones HTTPS, mientras que el atributo \texttt{SameSite} se configura para equilibrar seguridad y usabilidad: valores más laxos para el access token y más estrictos para el refresh token disminuyen el riesgo de ataques CSRF.
+La gestión de sesiones se basa en la combinación de JWT y cookies seguras. Los tokens se almacenan en cookies marcadas como \texttt{HttpOnly}, lo que impide su lectura desde código JavaScript en el navegador y reduce el impacto potencial de vulnerabilidades XSS. La marca \texttt{Secure} exige que las cookies sólo se envíen sobre conexiones HTTPS, mientras que el atributo \texttt{SameSite} se configura para equilibrar seguridad y usabilidad: valores más laxos para el access token y más estrictos para el refresh token disminuyen el riesgo de ataques CSRF en flujos de renovación.
 
-Dado que la autenticación se basa en cookies, se puede complementar con un token CSRF adicional para operaciones especialmente sensibles, como el cambio de contraseña o la eliminación de la cuenta, exigiendo que el cliente lo envíe en un encabezado separado. La expiración de los tokens se organiza de manera que los access tokens tengan una vida útil muy limitada, mientras que los refresh tokens se mantienen durante períodos más largos, aunque con rotación obligatoria en cada uso y con la posibilidad de definir un tiempo máximo absoluto de sesión.
+Dado que la autenticación se basa en cookies, se complementa con un token CSRF adicional para operaciones especialmente sensibles, como el cambio de contraseña, el logout y la eliminación de la cuenta, exigiendo que el cliente lo envíe en un encabezado separado. La expiración de los tokens se organiza de manera que los access tokens tengan una vida útil muy limitada (minutos), mientras que los refresh tokens se mantienen durante períodos más largos (semanas), aunque con rotación obligatoria en cada uso y con la posibilidad de definir un tiempo máximo absoluto de sesión.
 
-La revocación de sesiones se implementa a través de la tabla de refresh tokens. El sistema puede revocar un token concreto (de forma análoga a cerrar sesión en un dispositivo específico) o todos los tokens asociados a un usuario, por ejemplo después de un cambio de contraseña o de un incidente de seguridad. Este mecanismo permite un control fino sobre las sesiones activas sin necesidad de mantener tablas de sesión en memoria ni recurrir a soluciones de \emph{sticky sessions}.
+La revocación de sesiones se implementa a través de la tabla de refresh tokens. El sistema puede revocar un token concreto (de forma análoga a cerrar sesión en un dispositivo específico) o todos los tokens asociados a un usuario, por ejemplo después de un cambio de contraseña, un reseteo por olvido o un incidente de seguridad. Este mecanismo permite un control fino sobre las sesiones activas sin necesidad de mantener tablas de sesión en memoria ni recurrir a soluciones de \emph{sticky sessions}.
+
+\section{Controles adicionales: MFA, rate limiting y bloqueos}
+
+La \textbf{MFA} proporciona una segunda capa de defensa ante el compromiso de credenciales. El flujo básico incluye:
+\begin{itemize}
+  \item Alta de MFA: el usuario autenticado invoca un endpoint de configuración que genera un secreto TOTP y devuelve un \emph{otpauth URI} para registrar el segundo factor en una aplicación de autenticación.
+  \item Confirmación: el usuario ingresa un código TOTP generado por su aplicación; el servidor lo valida y, si es correcto, marca \texttt{mfa\_enabled = true}.
+  \item Uso en login: cuando \texttt{mfa\_enabled} está activo, el endpoint \texttt{POST /auth/login} exige un código válido además de la contraseña.
+\end{itemize}
+
+El \textbf{rate limiting} se aplica especialmente sobre endpoints críticos como \texttt{/auth/login} y \texttt{/auth/refresh}. Una política simple puede limitar, por ejemplo, a un número máximo de intentos de login por minuto y por IP. Para entornos productivos, este control debería apoyarse en un almacén centralizado (Redis u otro) para mantener coherencia entre instancias de backend.
+
+Los \textbf{bloqueos por intentos fallidos} se implementan a nivel de cuenta usando los campos \texttt{failed\_login\_attempts} y \texttt{locked\_until}. Tras un número configurable de intentos fallidos, la cuenta se bloquea temporalmente y el usuario debe esperar a que el bloqueo expire o, en su caso, utilizar el flujo de recuperación de contraseña. Los eventos de bloqueo y desbloqueo se registran en \texttt{auth\_logs} y pueden notificarse por correo.
 
 \section{Privacidad: minimización de datos, retención y borrado}
 
-En materia de \textbf{minimización de datos}, el sistema almacena únicamente la información estrictamente necesaria para la autenticación: dirección de correo electrónico, hash de la contraseña y, en su caso, un nombre de referencia. No se guardan direcciones físicas, documentos de identidad ni otros atributos que no resulten relevantes para el propósito del sistema. Los registros de auditoría incluyen sólo el identificador del usuario, la IP, el \emph{user agent} y el tipo de evento, sin incorporar datos personales adicionales.
+En materia de \textbf{minimización de datos}, el sistema almacena únicamente la información estrictamente necesaria para la autenticación: dirección de correo electrónico, hash de la contraseña y, en su caso, un nombre de referencia y datos mínimos para MFA. No se guardan direcciones físicas, documentos de identidad ni otros atributos que no resulten relevantes para el propósito del sistema. Los registros de auditoría incluyen sólo el identificador del usuario, la IP, el \emph{user agent}, el tipo de evento y metadatos técnicos, sin incorporar datos personales adicionales.
 
-La \textbf{retención de datos} se define mediante políticas específicas. Los registros de usuarios se conservan mientras la cuenta esté activa y el servicio en uso. Los refresh tokens se eliminan o se anonimizan una vez expirados y pasado un período de gracia razonable, suficiente para fines de auditoría. Los logs de autenticación se mantienen únicamente el tiempo necesario para investigar incidentes de seguridad y analizar patrones de ataque, tras lo cual pueden agregarse o borrarse, por ejemplo con una retención máxima de uno o dos años, en función de los requisitos legales y operativos.
+La \textbf{retención de datos} se define mediante políticas específicas. Los registros de usuarios se conservan mientras la cuenta esté activa y el servicio en uso. Los refresh tokens se eliminan o se anonimizan una vez expirados y pasado un período de gracia razonable, suficiente para fines de auditoría. Los tokens de verificación de correo y de reseteo de contraseña se purgan de la base de datos poco tiempo después de su expiración o uso. Los logs de autenticación se mantienen únicamente el tiempo necesario para investigar incidentes de seguridad y analizar patrones de ataque, tras lo cual pueden agregarse o borrarse, por ejemplo con una retención máxima de uno o dos años, en función de los requisitos legales y operativos.
 
-El sistema contempla mecanismos de \textbf{borrado} y anonimización. A petición del usuario, la cuenta puede desactivarse y, si se considera apropiado, los datos personales pueden sustituirse por valores irreversibles, manteniendo sólo la información indispensable para preservar la integridad referencial. En ese momento se revocan todos los tokens activos asociados a la cuenta. Además, procesos periódicos en segundo plano se encargan de eliminar refresh tokens expirados con antigüedad superior a la política definida y de depurar los registros de autenticación más antiguos que la fecha de retención establecida.
+El sistema contempla mecanismos de \textbf{borrado} y anonimización. A petición del usuario, la cuenta puede desactivarse y, si se considera apropiado, los datos personales pueden sustituirse por valores irreversibles, manteniendo sólo la información indispensable para preservar la integridad referencial. En ese momento se revocan todos los tokens activos asociados a la cuenta. Además, procesos periódicos en segundo plano se encargan de eliminar refresh tokens expirados con antigüedad superior a la política definida, depurar tokens de verificación y reseteo caducados y limpiar los registros de autenticación más antiguos que la fecha de retención establecida.
+
+\section{Diagramas de arquitectura y flujos de datos}
+
+A continuación se incluyen diagramas simples, en formato tabular, que resumen la arquitectura y el flujo de datos entre componentes.
+
+\begin{figure}[h]
+  \centering
+  \begin{tabular}{c}
+    \textbf{Cliente web / SPA} \\
+    $\downarrow$ HTTPS \\
+    \textbf{API Backend (FastAPI)} \\
+    $\downarrow$ \\
+    \textbf{Base de datos relacional} \\
+    $\downarrow$ \\
+    \textbf{Gestor de secretos y servicio de correo}
+  \end{tabular}
+  \caption{Vista lógica simplificada de los componentes del sistema.}
+\end{figure}
+
+\begin{figure}[h]
+  \centering
+  \begin{tabular}{lll}
+    Cliente & Backend & Base de datos \\
+    \midrule
+    \multicolumn{3}{l}{1. \texttt{POST /auth/register} (correo, contraseña)} \\
+     & $\rightarrow$ & Inserta usuario y token de verificación \\
+     & $\rightarrow$ & Registra log de alta \\
+    \multicolumn{3}{l}{2. Correo de verificación con enlace \texttt{/auth/verify-email}} \\
+    \multicolumn{3}{l}{3. \texttt{POST /auth/login} (credenciales + MFA)} \\
+     & $\rightarrow$ & Verifica usuario, contraseña y MFA \\
+     & $\rightarrow$ & Inserta refresh token y log de login \\
+    \multicolumn{3}{l}{4. Respuesta con cookies de access/refresh token} \\
+    \multicolumn{3}{l}{5. \texttt{POST /auth/refresh} (cookie de refresh)} \\
+     & $\rightarrow$ & Valida token, rota y actualiza \texttt{refresh\_tokens} \\
+  \end{tabular}
+  \caption{Flujo simplificado de registro, login y refresco de tokens.}
+\end{figure}
 
 \section{Conclusión}
 
-El diseño presentado describe un sistema de login seguro que integra hashing robusto de contraseñas, una gestión de sesiones basada en JWT y cookies seguras, flujos bien definidos para registro, autenticación, refresco de tokens, cierre de sesión y cambio de contraseña, y políticas claras de seguridad y privacidad. En conjunto, estos componentes se alinean con las buenas prácticas recomendadas para aplicaciones web modernas y proporcionan una base sólida para una implementación segura y mantenible.
+El diseño presentado describe un sistema de login seguro que integra hashing robusto de contraseñas, una gestión de sesiones basada en JWT y cookies seguras, flujos bien definidos para registro, verificación de correo, autenticación con MFA opcional, refresco de tokens, cierre de sesión, cambio de contraseña y recuperación por olvido, así como políticas claras de seguridad, privacidad, retención de datos y controles de abuso (rate limiting y bloqueos). En conjunto, estos componentes se alinean con las buenas prácticas recomendadas para aplicaciones web modernas y proporcionan una base sólida para una implementación segura y mantenible.
 
 \end{document}

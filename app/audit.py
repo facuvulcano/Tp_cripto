@@ -17,10 +17,14 @@ class AuthEvent(str, Enum):
     TOKEN_REFRESH_FAILURE = "token_refresh_failure"
     LOGOUT = "logout"
     PASSWORD_CHANGED = "password_changed"
-    PASSWORD_RESET_REQUEST = "password_reset_request"
-    PASSWORD_RESET = "password_reset"
+    PASSWORD_RESET_REQUESTED = "password_reset_requested"
+    PASSWORD_RESET_SUCCESS = "password_reset_success"
     EMAIL_VERIFICATION_SENT = "email_verification_sent"
     EMAIL_VERIFIED = "email_verified"
+    ACCOUNT_LOCKED = "account_locked"
+    MFA_SETUP = "mfa_setup"
+    MFA_ENABLED = "mfa_enabled"
+    MFA_DISABLED = "mfa_disabled"
 
 
 def log_event(

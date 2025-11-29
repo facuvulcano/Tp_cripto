@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from . import models, schemas
 from .config import get_settings
 from .database import get_db, init_db
-from .dependencies import get_current_user, require_active_user, require_csrf
+from .dependencies import get_current_user, rate_limit, require_active_user, require_csrf
 from .services.auth_service import AuthService
 
 settings = get_settings()
@@ -60,7 +60,7 @@ def verify_email(token: str, db: Session = Depends(get_db)) -> schemas.Message:
     return schemas.Message(detail="Correo verificado")
 
 
-@app.post("/auth/login")
+@app.post("/auth/login", dependencies=[Depends(rate_limit)])
 def login(
     *,
     payload: schemas.LoginRequest,
@@ -78,7 +78,7 @@ def login(
     return {"detail": "Autenticación exitosa", **metadata}
 
 
-@app.post("/auth/refresh")
+@app.post("/auth/refresh", dependencies=[Depends(rate_limit)])
 def refresh_token(*, response: Response, request: Request, db: Session = Depends(get_db)):
     refresh_cookie = request.cookies.get(settings.refresh_token_cookie_name)
     if not refresh_cookie:
@@ -133,6 +133,64 @@ def change_password(
         user_agent=request.headers.get("user-agent"),
     )
     return {"detail": "Contraseña actualizada"}
+
+
+@app.post("/auth/forgot-password", response_model=schemas.Message)
+def forgot_password(
+    *,
+    payload: schemas.ForgotPasswordRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    auth_service.initiate_password_reset(
+        db=db,
+        email=payload.email,
+        ip_address=_get_ip(request),
+        user_agent=request.headers.get("user-agent"),
+    )
+    return schemas.Message(detail="Si el correo existe, se ha enviado un enlace de recuperación")
+
+
+@app.post("/auth/reset-password", response_model=schemas.Message)
+def reset_password(
+    *,
+    payload: schemas.ResetPasswordRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    auth_service.reset_password(
+        db=db,
+        token=payload.token,
+        new_password=payload.new_password,
+        ip_address=_get_ip(request),
+        user_agent=request.headers.get("user-agent"),
+    )
+    return schemas.Message(detail="Contraseña restablecida")
+
+
+@app.post("/auth/mfa/setup", response_model=schemas.MfaSetupResponse)
+def mfa_setup(user: models.User = Depends(require_active_user), db: Session = Depends(get_db)) -> schemas.MfaSetupResponse:
+    return auth_service.mfa_setup(db=db, user=user)
+
+
+@app.post("/auth/mfa/confirm", response_model=schemas.Message)
+def mfa_confirm(
+    payload: schemas.MfaConfirmRequest,
+    user: models.User = Depends(require_active_user),
+    db: Session = Depends(get_db),
+) -> schemas.Message:
+    auth_service.mfa_confirm(db=db, user=user, code=payload.code)
+    return schemas.Message(detail="MFA habilitado")
+
+
+@app.post("/auth/mfa/disable", response_model=schemas.Message)
+def mfa_disable(
+    payload: schemas.MfaDisableRequest,
+    user: models.User = Depends(require_active_user),
+    db: Session = Depends(get_db),
+) -> schemas.Message:
+    auth_service.mfa_disable(db=db, user=user, code=payload.code)
+    return schemas.Message(detail="MFA deshabilitado")
 
 
 @app.get("/auth/me", response_model=schemas.UserRead)

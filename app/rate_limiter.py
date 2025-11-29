@@ -37,7 +37,7 @@ class RateLimiter:
             return False
         return (
             time.time() - window.window_started <= settings.rate_limit_window_seconds
-            and window.attempts >= settings.rate_limit_attempts
+            and window.attempts >= settings.rate_limit_max_requests
         )
 
     def reset(self, key: str) -> None:

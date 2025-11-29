@@ -1,0 +1,12 @@
+From: no-reply@example.com
+To: lock@example.com
+Subject: Confirma tu cuenta
+
+Hola,
+
+Gracias por registrarte. Confirma tu correo copiando el siguiente enlace
+en tu navegador:
+
+http://localhost:8000/auth/verify-email?token=7j2MK1A9QMtUkfdfq2bQbrp3yZvpAFGfAqLyN6G_b2k
+
+Si no solicitaste esta cuenta, puedes ignorar este mensaje.

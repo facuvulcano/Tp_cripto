@@ -3,8 +3,9 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any, Optional
+import uuid
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, constr, field_validator
 
 
 class Message(BaseModel):
@@ -18,11 +19,12 @@ class UserCreate(BaseModel):
 
 
 class UserRead(BaseModel):
-    id: str
+    id: uuid.UUID
     email: EmailStr
     name: Optional[str]
     is_active: bool
-    is_verified: bool
+    is_email_verified: bool
+    mfa_enabled: bool
     created_at: datetime
     last_login_at: Optional[datetime]
 
@@ -32,6 +34,7 @@ class UserRead(BaseModel):
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str
+    mfa_code: Optional[str] = None
 
 
 class TokenPair(BaseModel):
@@ -59,13 +62,13 @@ class AuditLogRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
-class PasswordResetRequest(BaseModel):
+class ForgotPasswordRequest(BaseModel):
     email: EmailStr
 
 
-class PasswordResetConfirm(BaseModel):
+class ResetPasswordRequest(BaseModel):
     token: str
-    new_password: str
+    new_password: constr(min_length=8)
 
     @field_validator("new_password")
     @classmethod
@@ -73,3 +76,15 @@ class PasswordResetConfirm(BaseModel):
         if len(value) < 12:
             raise ValueError("La contraseña debe tener al menos 12 caracteres")
         return value
+
+
+class MfaSetupResponse(BaseModel):
+    otpauth_uri: str
+
+
+class MfaConfirmRequest(BaseModel):
+    code: str
+
+
+class MfaDisableRequest(BaseModel):
+    code: str

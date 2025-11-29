@@ -3,10 +3,10 @@ from __future__ import annotations
 
 import logging
 import re
-import hashlib
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+import pyotp
 from fastapi import HTTPException, Response, status
 from sqlalchemy import and_
 from sqlalchemy.orm import Session
@@ -23,7 +23,9 @@ from ..security import (
     create_refresh_token,
     decode_token,
     generate_csrf_token,
+    generate_random_token,
     generate_token_identifier,
+    hash_token,
     hash_password,
     verify_password,
 )
@@ -78,18 +80,35 @@ class AuthService:
             self._register_failed_attempt(db=db, user=None, email=email, ip_address=ip_address, user_agent=user_agent)
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Credenciales inválidas")
 
+        if not user.is_active:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cuenta inactiva")
+
         now = datetime.now(timezone.utc)
-        locked_until = user.locked_until
-        if locked_until and locked_until.tzinfo is None:
-            locked_until = locked_until.replace(tzinfo=timezone.utc)
-        if locked_until and locked_until > now:
-            raise HTTPException(status_code=status.HTTP_423_LOCKED, detail="Cuenta temporalmente bloqueada")
+        self._ensure_not_locked(user)
+
+        if self.settings.require_verified_email and not user.is_email_verified:
+            log_event(
+                db,
+                event_type=AuthEvent.LOGIN_FAILURE,
+                user_id=user.id,
+                ip_address=ip_address,
+                user_agent=user_agent,
+                metadata={"reason": "email_not_verified"},
+            )
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Correo no verificado")
 
         if not verify_password(payload.password, user.password_hash):
             self._register_failed_attempt(db=db, user=user, email=email, ip_address=ip_address, user_agent=user_agent)
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Credenciales inválidas")
 
-        self._clear_failures(user, db)
+        if user.mfa_enabled:
+            if not payload.mfa_code or not self._verify_mfa_code(user, payload.mfa_code):
+                self._register_failed_attempt(
+                    db=db, user=user, email=email, ip_address=ip_address, user_agent=user_agent
+                )
+                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Credenciales inválidas")
+
+        self._reset_failed_logins(db, user)
         user.last_login_at = now
         db.commit()
         db.refresh(user)
@@ -230,29 +249,147 @@ class AuthService:
             user_agent=user_agent,
         )
 
-    # -------------------- Email verification --------------------
-    def verify_email(self, db: Session, *, token: str) -> None:
-        token_hash = self._hash_token(token)
+    # -------------------- Password reset --------------------
+    def initiate_password_reset(
+        self,
+        *,
+        db: Session,
+        email: str,
+        ip_address: str | None,
+        user_agent: str | None,
+    ) -> None:
+        user = db.query(models.User).filter(models.User.email == email.lower()).first()
+        if not user or not user.is_active:
+            return
+
+        raw_token = generate_random_token()
+        token_hash = hash_token(raw_token)
+        expires_at = datetime.now(timezone.utc) + timedelta(minutes=self.settings.password_reset_token_exp_minutes)
+
+        db.add(
+            models.PasswordResetToken(
+                user_id=user.id,
+                token_hash=token_hash,
+                expires_at=expires_at,
+                ip_address=ip_address,
+                user_agent=user_agent,
+            )
+        )
+        db.commit()
+
+        self.email_service.send_password_reset_email(to_email=user.email, token=raw_token)
+        log_event(
+            db,
+            event_type=AuthEvent.PASSWORD_RESET_REQUESTED,
+            user_id=user.id,
+            ip_address=ip_address,
+            user_agent=user_agent,
+        )
+
+    def reset_password(
+        self,
+        *,
+        db: Session,
+        token: str,
+        new_password: str,
+        ip_address: str | None,
+        user_agent: str | None,
+    ) -> None:
+        token_hash = hash_token(token)
         record = (
-            db.query(models.EmailVerificationToken)
-            .filter(models.EmailVerificationToken.token_hash == token_hash)
+            db.query(models.PasswordResetToken)
+            .filter(
+                models.PasswordResetToken.token_hash == token_hash,
+                models.PasswordResetToken.used_at.is_(None),
+            )
             .first()
         )
         now = datetime.now(timezone.utc)
         if not record:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Token inválido")
-        if record.used_at:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Token ya utilizado")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Token inválido o expirado")
         expires_at = record.expires_at
         if expires_at.tzinfo is None:
             expires_at = expires_at.replace(tzinfo=timezone.utc)
         if now > expires_at:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Token expirado")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Token inválido o expirado")
 
         user = record.user
         if not user:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cuenta no disponible")
-        user.is_verified = True
+
+        self._validate_password_strength(new_password)
+        user.password_hash = hash_password(new_password)
+        self._reset_failed_logins(db, user)
+        record.used_at = now
+        db.add_all([user, record])
+        db.commit()
+
+        self._revoke_all_refresh_tokens(db, user_id=user.id)
+        log_event(
+            db,
+            event_type=AuthEvent.PASSWORD_RESET_SUCCESS,
+            user_id=user.id,
+            ip_address=ip_address,
+            user_agent=user_agent,
+        )
+
+    # -------------------- MFA --------------------
+    def mfa_setup(self, *, db: Session, user: models.User) -> schemas.MfaSetupResponse:
+        secret = pyotp.random_base32()
+        user.mfa_secret = secret
+        user.mfa_enabled = False
+        db.add(user)
+        db.commit()
+
+        totp = pyotp.TOTP(secret)
+        otpauth_uri = totp.provisioning_uri(name=user.email, issuer_name=self.settings.mfa_issuer)
+        log_event(db, event_type=AuthEvent.MFA_SETUP, user_id=user.id)
+        return schemas.MfaSetupResponse(otpauth_uri=otpauth_uri)
+
+    def mfa_confirm(self, *, db: Session, user: models.User, code: str) -> None:
+        if not user.mfa_secret:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="MFA no inicializada")
+        if not self._verify_mfa_code(user, code):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Código inválido")
+
+        user.mfa_enabled = True
+        db.add(user)
+        db.commit()
+        log_event(db, event_type=AuthEvent.MFA_ENABLED, user_id=user.id)
+
+    def mfa_disable(self, *, db: Session, user: models.User, code: str) -> None:
+        if user.mfa_enabled and not self._verify_mfa_code(user, code):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Código inválido")
+        user.mfa_enabled = False
+        user.mfa_secret = None
+        db.add(user)
+        db.commit()
+        log_event(db, event_type=AuthEvent.MFA_DISABLED, user_id=user.id)
+
+    # -------------------- Email verification --------------------
+    def verify_email(self, db: Session, *, token: str) -> None:
+        token_hash = hash_token(token)
+        record = (
+            db.query(models.EmailVerificationToken)
+            .filter(
+                models.EmailVerificationToken.token_hash == token_hash,
+                models.EmailVerificationToken.used_at.is_(None),
+            )
+            .first()
+        )
+        now = datetime.now(timezone.utc)
+        if not record:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Token inválido o expirado")
+        expires_at = record.expires_at
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        if now > expires_at:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Token inválido o expirado")
+
+        user = record.user
+        if not user:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cuenta no disponible")
+        user.is_email_verified = True
         record.used_at = now
         db.add_all([user, record])
         db.commit()
@@ -260,6 +397,22 @@ class AuthService:
         log_event(db, event_type=AuthEvent.EMAIL_VERIFIED, user_id=user.id)
 
     # -------------------- Helpers --------------------
+    def _ensure_not_locked(self, user: models.User) -> None:
+        locked_until = user.locked_until
+        if locked_until and locked_until.tzinfo is None:
+            locked_until = locked_until.replace(tzinfo=timezone.utc)
+        if locked_until and locked_until > datetime.now(timezone.utc):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cuenta bloqueada temporalmente",
+            )
+
+    def _verify_mfa_code(self, user: models.User, code: str) -> bool:
+        if not user.mfa_secret:
+            return False
+        totp = pyotp.TOTP(user.mfa_secret)
+        return totp.verify(code, valid_window=1)
+
     def _issue_tokens(
         self,
         db: Session,
@@ -334,8 +487,15 @@ class AuthService:
         metadata = {"email": email}
         if user:
             user.failed_login_attempts += 1
-            if user.failed_login_attempts >= self.settings.rate_limit_attempts:
-                user.locked_until = now + timedelta(minutes=self.settings.account_lock_minutes)
+            if user.failed_login_attempts >= self.settings.max_failed_login_attempts:
+                user.locked_until = now + timedelta(minutes=self.settings.lockout_minutes)
+                log_event(
+                    db,
+                    event_type=AuthEvent.ACCOUNT_LOCKED,
+                    user_id=user.id,
+                    ip_address=ip_address,
+                    user_agent=user_agent,
+                )
             db.add(user)
             db.commit()
             metadata["failed_attempts"] = user.failed_login_attempts
@@ -348,7 +508,7 @@ class AuthService:
             metadata=metadata,
         )
 
-    def _clear_failures(self, user: models.User, db: Session) -> None:
+    def _reset_failed_logins(self, db: Session, user: models.User) -> None:
         user.failed_login_attempts = 0
         user.locked_until = None
         db.add(user)
@@ -389,13 +549,10 @@ class AuthService:
         db.commit()
 
     def _create_verification_token(self, db: Session, user: models.User) -> str:
-        token = generate_token_identifier()
-        token_hash = self._hash_token(token)
+        token = generate_random_token()
+        token_hash = hash_token(token)
         expires_at = datetime.now(timezone.utc) + timedelta(minutes=self.settings.verification_token_exp_minutes)
         record = models.EmailVerificationToken(user_id=user.id, token_hash=token_hash, expires_at=expires_at)
         db.add(record)
         db.commit()
         return token
-
-    def _hash_token(self, token: str) -> str:
-        return hashlib.sha256(token.encode("utf-8")).hexdigest()

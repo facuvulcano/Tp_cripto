@@ -41,6 +41,25 @@ class EmailService:
         ).strip()
         self._send(to_email=to_email, subject=subject, body=body)
 
+    def send_password_reset_email(self, *, to_email: str, token: str) -> None:
+        """Send a password reset email with a one-time token."""
+
+        link = f"{self.settings.password_reset_base_url}?token={token}"
+        subject = "Recupera tu contraseña"
+        body = dedent(
+            f"""
+            Hola,
+
+            Recibimos un pedido para restablecer tu contraseña. Podés hacerlo
+            usando este enlace temporal:
+
+            {link}
+
+            Si no hiciste esta solicitud, ignorá este correo. El enlace expira pronto.
+            """
+        ).strip()
+        self._send(to_email=to_email, subject=subject, body=body)
+
     def _send(self, *, to_email: str, subject: str, body: str) -> None:
         message = f"From: {self.settings.email_from}\nTo: {to_email}\nSubject: {subject}\n\n{body}\n"
         logger.info("Email preparado para %s con asunto '%s'", to_email, subject)

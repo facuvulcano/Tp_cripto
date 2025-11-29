@@ -1,0 +1,12 @@
+From: no-reply@example.com
+To: facuvulcano1999@gmail.com
+Subject: Confirma tu cuenta
+
+Hola,
+
+Gracias por registrarte. Confirma tu correo copiando el siguiente enlace
+en tu navegador:
+
+http://localhost:8000/auth/verify-email?token=ZqALAKFESsrayLuTmvkeWKw6s6AiYZp1iv6cbo-rVok
+
+Si no solicitaste esta cuenta, puedes ignorar este mensaje.

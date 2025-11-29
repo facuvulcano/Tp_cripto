@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import secrets
+import hashlib
+import hmac
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict
 
@@ -75,6 +77,19 @@ def generate_token_identifier() -> str:
 
 def generate_csrf_token() -> str:
     return secrets.token_urlsafe(16)
+
+
+def generate_random_token() -> str:
+    """Generate a high-entropy one-time token for email and password reset flows."""
+
+    return secrets.token_urlsafe(32)
+
+
+def hash_token(token: str) -> str:
+    """Return an HMAC-SHA256 hash of a token so only the digest is stored."""
+
+    secret = settings.jwt_secret_key.encode("utf-8")
+    return hmac.new(secret, token.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
 def attach_cookie(

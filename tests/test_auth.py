@@ -94,7 +94,7 @@ def test_register_sends_verification_email(db_session) -> None:
 
     service.verify_email(db_session, token=token)
     db_session.refresh(user)
-    assert user.is_verified is True
+    assert user.is_email_verified is True
 
 
 def test_refresh_rotates_tokens(db_session) -> None:
@@ -184,7 +184,7 @@ def test_change_password_revokes_tokens(db_session) -> None:
 
 def test_account_lockout_after_multiple_failures(db_session) -> None:
     user = _register_user(db_session, "lock@example.com", "ContraseñaFuerte1$")
-    attempts = settings.rate_limit_attempts
+    attempts = settings.max_failed_login_attempts
 
     for i in range(attempts):
         with pytest.raises(HTTPException):
@@ -204,4 +204,4 @@ def test_account_lockout_after_multiple_failures(db_session) -> None:
             ip_address="10.0.0.99",
             user_agent="pytest",
         )
-    assert exc.value.status_code == 423
+    assert exc.value.status_code == 403

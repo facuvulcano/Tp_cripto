@@ -18,7 +18,9 @@ class Settings(BaseSettings):
     refresh_token_exp_minutes: int = Field(default=60 * 24 * 7, env="REFRESH_TOKEN_MINUTES")
     max_refresh_token_ttl_minutes: int = Field(default=60 * 24 * 30)
     verification_token_exp_minutes: int = Field(default=60 * 24, env="VERIFICATION_TOKEN_MINUTES")
+    password_reset_token_exp_minutes: int = Field(default=60, env="PASSWORD_RESET_TOKEN_MINUTES")
     verification_base_url: str = Field(default="http://localhost:8000/auth/verify-email")
+    password_reset_base_url: str = Field(default="http://localhost:8000/auth/reset-password")
     refresh_token_cookie_name: str = Field(default="refresh_token")
     access_token_cookie_name: str = Field(default="access_token")
     csrf_cookie_name: str = Field(default="csrf_token")
@@ -32,10 +34,13 @@ class Settings(BaseSettings):
     argon2_time_cost: int = Field(default=3)
     argon2_memory_cost: int = Field(default=65536)
     argon2_parallelism: int = Field(default=2)
-    rate_limit_attempts: int = Field(default=6)
+    rate_limit_max_requests: int = Field(default=20)
     rate_limit_window_seconds: int = Field(default=60)
-    account_lock_minutes: int = Field(default=5)
+    max_failed_login_attempts: int = Field(default=5)
+    lockout_minutes: int = Field(default=15)
     password_min_length: int = Field(default=12)
+    require_verified_email: bool = Field(default=False)
+    mfa_issuer: str = Field(default="Secure Login Service")
 
     class Config:
         env_file = ".env"

@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from . import models
 from .config import get_settings
 from .database import get_db
+from .rate_limiter import rate_limiter
 from .security import TokenError, decode_token
 
 settings = get_settings()
@@ -49,3 +50,14 @@ def require_csrf(request: Request) -> str:
     if not header_value or not cookie_value or header_value != cookie_value:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="CSRF token inválido")
     return header_value
+
+
+def rate_limit(request: Request) -> None:
+    client_host = request.client.host if request.client else "unknown"
+    key = f"{client_host}:{request.url.path}"
+    if rate_limiter.is_limited(key):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Demasiadas peticiones, inténtelo de nuevo más tarde",
+        )
+    rate_limiter.increment(key)
